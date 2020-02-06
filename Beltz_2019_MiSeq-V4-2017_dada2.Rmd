@@ -1,0 +1,310 @@
+---
+title: "Initial Microbial Analysis - dada2/ASV"
+author: "Christopher Beltz"
+date: "12/01/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+**Following tutorial from: https://benjjneb.github.io/dada2/tutorial.html**
+
+
+Load dada2 and check version:
+```{r}
+library(dada2)
+packageVersion("dada2")
+```
+
+
+Add path to location for fastq files from MiSeq tutorial:
+```{r}
+path <- "~/Dropbox (Yale_FES)/Projects/Proj.003_2017_CBeltz_Dissertation/2_Data-Generation/Microbial/2017_MiSeqv2/2017_V4_unzipped"
+
+list.files(path)
+```
+
+
+Read in names of fastq files and get matched lists for forward/reverse fastq files:
+```{r}
+# Forward and reverse fastq filenames have format: SAMPLENAME_R1_001.fastq and SAMPLENAME_R2_001.fastq
+fnFs <- sort(list.files(path, pattern="_R1.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_R2.fastq", full.names = TRUE))
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample.names <- substring((basename(fnFs)), 25, 26)
+sample.names <- gsub("_", "", sample.names)
+sample.names
+```
+
+
+Check quality scores of forward reads:
+```{r}
+plotQualityProfile(fnFs[1:2])
+```
+
+
+Check quality scores of reverse reads:
+```{r}
+plotQualityProfile(fnRs[1:2])
+```
+
+
+```{r}
+# Place filtered files in filtered/ subdirectory
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+```
+
+
+```{r}
+#240/200 (2/2) = 50%
+#280/220 (2/2) = 45%
+#250/210 (2/2) = 35%
+#230/190 (2/2) = 35%
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(230,190),
+              maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
+              compress=TRUE, multithread=TRUE) # On Windows set multithread=FALSE
+head(out)
+```
+
+
+Learn error rate of forward reads:
+```{r}
+errF <- learnErrors(filtFs, multithread=TRUE)
+```
+
+
+Learn error rates of reverse reads:
+```{r}
+errR <- learnErrors(filtRs, multithread=TRUE)
+```
+
+
+Plot errors:
+```{r}
+plotErrors(errF, nominalQ=TRUE)
+```
+
+Sample inference forward:
+```{r}
+dadaFs <- dada(filtFs, err=errF, multithread=TRUE)
+```
+
+
+Sample inference reverse:
+```{r}
+dadaRs <- dada(filtRs, err=errR, multithread=TRUE)
+```
+
+
+Inspect dada-class object:
+```{r}
+dadaFs[[1]]
+```
+
+
+Merge paired reads:
+```{r}
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE)
+
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+```
+
+
+Create sequence table:
+```{r}
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+```
+
+Inspect distribution of sequence lengths:
+```{r}
+table(nchar(getSequences(seqtab)))
+```
+
+
+Remove chimeras:
+```{r}
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+
+dim(seqtab.nochim)
+```
+
+
+Calculate proportion of non-chimeras:
+```{r}
+sum(seqtab.nochim)/sum(seqtab)
+```
+
+
+Track reads thorugh pipeline:
+```{r}
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+```
+
+
+Assign taxonomy:
+```{r}
+taxa <- assignTaxonomy(seqtab.nochim,"~/Dropbox (Yale_FES)/Projects/Proj.003_2017_CBeltz_Dissertation/4_Data-Analysis/Microbial/2017_MiSeq/dada2/silva_nr_v132_train_set.fa.gz", multithread=TRUE)
+```
+
+
+Inspect taxonomic assignments:
+```{r}
+taxa.print <- taxa # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+
+Evaluate accuracy of mock community:
+```{r, eval=F}
+#no mock community in 2017 MiSeq run
+unqs.mock <- seqtab.nochim["Mock",]
+unqs.mock <- sort(unqs.mock[unqs.mock>0], decreasing=TRUE) # Drop ASVs absent in the Mock
+cat("DADA2 inferred", length(unqs.mock), "sample sequences present in the Mock community.\n")
+```
+
+
+```{r, eval=F}
+mock.ref <- getSequences(file.path(path, "HMP_MOCK.v35.fasta"))
+match.ref <- sum(sapply(names(unqs.mock), function(x) any(grepl(x, mock.ref))))
+cat("Of those,", sum(match.ref), "were exact matches to the expected reference sequences.\n")
+```
+
+
+Save session and phyloseq objects:
+```{r}
+#save session
+save.image("/Users/cwb48/Desktop/microbial_analysis.rdata")
+```
+
+```{r}
+#save objects
+saveRDS(seqtab.nochim, "/Users/cwb48/Desktop/seqtab.nochim.rds")
+saveRDS(taxa, "/Users/cwb48/Desktop/taxa.rds")
+```
+
+
+
+Handoff to phyloseq:
+```{r}
+library(phyloseq); packageVersion("phyloseq")
+library(Biostrings); packageVersion("Biostrings")
+library(ggplot2); packageVersion("ggplot2")
+```
+
+
+Set ggplot2 theme:
+```{r}
+theme_set(theme_bw())
+```
+
+
+Construct sample data frame:
+```{r, eval=F}
+samples.out <- rownames(seqtab.nochim)
+subject <- sapply(strsplit(samples.out, "D"), `[`, 1)
+gender <- substr(subject,1,1)
+subject <- substr(subject,2,999)
+day <- as.integer(sapply(strsplit(samples.out, "D"), `[`, 2))
+samdf <- data.frame(Subject=subject, Gender=gender, Day=day)
+samdf$When <- "Early"
+samdf$When[samdf$Day>100] <- "Late"
+rownames(samdf) <- samples.out
+```
+
+
+Read in sample metadata:
+```{r}
+samdf <-read.csv("dada2_metadata_2017-V4.csv")
+rownames(samdf) <- samdf$Sample.Code
+```
+
+
+Construct phyloseq object from DADA2 output:
+```{r}
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxa))
+
+#remove extraction and water blanks
+ps.sub <- prune_samples(sample_names(ps) != "15", ps)
+ps.sub <- prune_samples(sample_names(ps.sub) != "33", ps.sub)
+ps.sub <- prune_samples(sample_names(ps.sub) != "51", ps.sub) 
+ps.sub <- prune_samples(sample_names(ps.sub) != "52", ps.sub) 
+ps.sub <- prune_samples(sample_names(ps.sub) != "53", ps.sub) 
+```
+
+
+Construct short ASV names:
+```{r}
+dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(dna) <- taxa_names(ps)
+ps <- merge_phyloseq(ps, dna)
+taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+ps
+```
+
+
+Visualize alpha diversity:
+```{r}
+plot_richness(ps.sub, x="Site", measures=c("Observed", "Shannon", "Simpson"), color="Treatment") #+
+  #theme(axis.text.x = element_blank(),
+       # axis.ticks.x = element_blank()) +
+ # theme(axis.text.y = element_text(angle = 90, hjust = 1, size=8,color="black")) +
+  #theme(legend.position = "none")
+  
+```
+
+```{r, eval=FALSE}
+library(here)
+ggsave(filename="Microbial_dada2_richness_TEMP.pdf",
+       path=here("4_Data-Analysis", "Microbial", "2017_MiSeq", "Figures"),
+       bg="transparent", 
+       units="in",
+       width=8,
+       height=6)
+
+#4x3 for small figure
+```
+
+
+Ordination: PCoA w/ Bray-Curtis
+
+```{r}
+V4.2018_PCoA.bray <- ordinate(ps.sub, "PCoA", "bray", weighted=FALSE)
+```
+
+```{r}
+plot_ordination(ps.sub, V4.2018_PCoA.bray, color="Treatment", shape="Site")
+```
+
+```{r, eval=FALSE}
+library(here)
+ggsave(filename="Microbial_dada2_PCoA-bray_TEMP.pdf",
+       path=here("4_Data-Analysis", "Microbial", "2017_MiSeq", "Figures"),
+       bg="transparent", 
+       units="in",
+       width=8,
+       height=6)
+```
+
+
+Bar plot:
+```{r}
+top20 <- names(sort(taxa_sums(ps.sub), decreasing=TRUE))[1:20]
+ps.top20 <- transform_sample_counts(ps.sub, function(OTU) OTU/sum(OTU))
+ps.top20 <- prune_taxa(top20, ps.top20)
+plot_bar(ps.top20, x="Site", fill="Treatment") + facet_wrap(~Site, scales="free_x")
+```
+
