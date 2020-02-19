@@ -1,7 +1,7 @@
 ---
 title: "Initial Microbial Analysis - dada2/ASV"
 author: "Christopher Beltz"
-date: "02/18/2019"
+date: "02/19/2019"
 output:
   pdf_document: default
   html_document: default
@@ -154,6 +154,7 @@ head(track)
 
 Assign taxonomy:
 ```{r}
+#check for updated silva reference files on occasion (last updated 2019-10-18)
 taxa <- assignTaxonomy(seqtab.nochim,"~/Dropbox (Yale_FES)/Projects/Proj.003_2017_CBeltz_Dissertation/4_Data-Analysis/Microbial/2017_MiSeq/dada2/silva_nr_v132_train_set.fa.gz", multithread=TRUE)
 ```
 
@@ -166,7 +167,7 @@ head(taxa.print)
 ```
 
 
-Evaluate accuracy of mock community:
+Evaluate accuracy of mock community (not needed for 2017 data;no Zymo mock community sequenced):
 ```{r, eval=F}
 #no mock community in 2017 MiSeq run
 unqs.mock <- seqtab.nochim["Mock",]
@@ -176,6 +177,7 @@ cat("DADA2 inferred", length(unqs.mock), "sample sequences present in the Mock c
 
 
 ```{r, eval=F}
+#no mock community in 2017 MiSeq run
 mock.ref <- getSequences(file.path(path, "HMP_MOCK.v35.fasta"))
 match.ref <- sum(sapply(names(unqs.mock), function(x) any(grepl(x, mock.ref))))
 cat("Of those,", sum(match.ref), "were exact matches to the expected reference sequences.\n")
